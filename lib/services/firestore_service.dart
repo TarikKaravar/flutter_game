@@ -2,63 +2,75 @@
 import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import '../models/game_settings.dart'; // Rol hesaplama algoritması buradan geliyor
+import '../models/game_settings.dart';
 
 class FirestoreService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
-  // 1. ODA KURMA (Create Room)
+  // 1. ODA KURMA
   Future<String?> createRoom(String hostName) async {
     try {
-      // Önce misafir girişi yapalım (Anonim)
       UserCredential userCredential = await _auth.signInAnonymously();
       String userId = userCredential.user!.uid;
-
-      // Rastgele 6 haneli oda kodu üret
       String roomId = _generateRoomCode();
 
-      // Odayı oluştur
+      // Varsayılan ayarlar (1 Vampir, 1 Doktor, 1 Gözcü)
+      Map<String, int> defaultSettings = {
+        'vampires': 1,
+        'doctors': 1,
+        'watchers': 1,
+      };
+
       await _firestore.collection('games').doc(roomId).set({
         'roomId': roomId,
         'hostId': userId,
-        'status': 'waiting', // waiting, playing, finished
-        'phase': 'day',      // day, night
+        'status': 'waiting',
+        'phase': 'day',
+        'settings': defaultSettings, // Ayarları buraya ekledik
         'createdAt': FieldValue.serverTimestamp(),
       });
 
-      // Host'u oyuncular listesine ekle
       await _firestore.collection('games').doc(roomId).collection('players').doc(userId).set({
         'id': userId,
         'name': hostName,
-        'role': 'host', // Oyun başlayınca değişecek
+        'role': 'host',
         'isAlive': true,
         'isHost': true,
         'joinedAt': FieldValue.serverTimestamp(),
       });
 
-      return roomId; // Başarılıysa oda kodunu dön
+      return roomId;
     } catch (e) {
       print("Oda kurma hatası: $e");
       return null;
     }
   }
 
-  // 2. ODAYA KATILMA (Join Room)
+  // 2. AYARLARI GÜNCELLE (YENİ FONKSİYON)
+  Future<void> updateGameSettings(String roomId, int v, int d, int w) async {
+    try {
+      await _firestore.collection('games').doc(roomId).update({
+        'settings': {
+          'vampires': v,
+          'doctors': d,
+          'watchers': w,
+        }
+      });
+    } catch (e) {
+      print("Ayar güncelleme hatası: $e");
+    }
+  }
+
+  // 3. ODAYA KATILMA
   Future<bool> joinRoom(String roomId, String playerName) async {
     try {
-      // Oda var mı kontrol et
       DocumentSnapshot roomDoc = await _firestore.collection('games').doc(roomId).get();
-      if (!roomDoc.exists) {
-        print("Böyle bir oda yok!");
-        return false;
-      }
+      if (!roomDoc.exists) return false;
 
-      // Giriş yap
       UserCredential userCredential = await _auth.signInAnonymously();
       String userId = userCredential.user!.uid;
 
-      // Oyuncuyu ekle
       await _firestore.collection('games').doc(roomId).collection('players').doc(userId).set({
         'id': userId,
         'name': playerName,
@@ -70,74 +82,79 @@ class FirestoreService {
 
       return true;
     } catch (e) {
-      print("Odaya katılma hatası: $e");
+      print("Katılma hatası: $e");
       return false;
     }
   }
 
-  // 3. OYUN VERİSİNİ DİNLE (Oyun başladı mı? Hangi fazdayız?)
   Stream<DocumentSnapshot> getGameStream(String roomId) {
     return _firestore.collection('games').doc(roomId).snapshots();
   }
 
-  // 4. OYUNCULARI DİNLE (Kimler geldi?)
   Stream<QuerySnapshot> getPlayersStream(String roomId) {
-    return _firestore.collection('games')
-        .doc(roomId)
-        .collection('players')
-        .orderBy('joinedAt')
-        .snapshots();
+    return _firestore.collection('games').doc(roomId).collection('players').orderBy('joinedAt').snapshots();
   }
 
-  // 5. OYUNU BAŞLAT VE ROLLERİ DAĞIT (Host kullanır)
+  Future<void> updatePhase(String roomId, String newPhase) async {
+    await _firestore.collection('games').doc(roomId).update({
+      'phase': newPhase,
+      'lastPhaseChange': FieldValue.serverTimestamp(),
+    });
+  }
+
+  // 4. OYUNU BAŞLAT (GÜNCELLENDİ: ARTIK AYARLARI OKUYOR)
   Future<void> assignRolesAndStart(String roomId) async {
     try {
-      // A. Oyuncuları Çek
       var roomRef = _firestore.collection('games').doc(roomId);
+      
+      // Hem oda bilgisini (ayarlar için) hem oyuncuları çek
+      var roomSnapshot = await roomRef.get();
       var playersSnapshot = await roomRef.collection('players').get();
       var players = playersSnapshot.docs;
 
       if (players.isEmpty) return;
 
-      // B. Rolleri Hesapla
-      // GameSettings sınıfı otomatik olarak oyuncu sayısına göre rolleri belirler
-      final settings = GameSettings.fromPlayerCount(players.length);
+      // Ayarları al
+      var settingsMap = roomSnapshot.data()?['settings'] as Map<String, dynamic>?;
+      int v = settingsMap?['vampires'] ?? 1;
+      int d = settingsMap?['doctors'] ?? 1;
+      int w = settingsMap?['watchers'] ?? 1;
+
+      // GameSettings objesi oluştur (Oyuncu sayısı şu anki sayı, roller ayardan)
+      final settings = GameSettings(
+        players: players.length,
+        vampires: v,
+        doctors: d,
+        watchers: w,
+      );
+
       final roles = settings.generateRoles();
 
-      // C. Veritabanına Toplu Yazma (Batch Write)
-      // Bu işlem atomiktir: Ya hepsi yazılır ya hiçbiri yazılmaz (Güvenli)
       WriteBatch batch = _firestore.batch();
 
       for (int i = 0; i < players.length; i++) {
-        // Her oyuncuya sırayla listeden bir rol ata
-        // roles listesi zaten karıştırılmış (shuffle) geliyor
         batch.update(players[i].reference, {
           'role': roles[i],
           'isAlive': true,
         });
       }
 
-      // D. Oyun Durumunu "Playing" Yap
       batch.update(roomRef, {
         'status': 'playing',
-        'phase': 'day', // Oyun gündüz başlar
+        'phase': 'day',
         'startedAt': FieldValue.serverTimestamp(),
       });
 
-      // E. Değişiklikleri Uygula
       await batch.commit();
-      print("Oyun başlatıldı ve roller dağıtıldı!");
 
     } catch (e) {
-      print("Oyun başlatma hatası: $e");
+      print("Başlatma hatası: $e");
     }
   }
 
-  // YARDIMCI: Rastgele Oda Kodu Üretici (6 Haneli)
   String _generateRoomCode() {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     Random rnd = Random();
-    return String.fromCharCodes(Iterable.generate(
-        6, (_) => chars.codeUnitAt(rnd.nextInt(chars.length))));
+    return String.fromCharCodes(Iterable.generate(6, (_) => chars.codeUnitAt(rnd.nextInt(chars.length))));
   }
 }
