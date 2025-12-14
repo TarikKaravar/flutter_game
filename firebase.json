@@ -1,1 +1,39 @@
-{"flutter":{"platforms":{"android":{"default":{"projectId":"vampir-koylu-online","appId":"1:152359980068:android:fdad94839475f6c9885cb1","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"vampir-koylu-online","configurations":{"android":"1:152359980068:android:fdad94839475f6c9885cb1","ios":"1:152359980068:ios:875e07863de24054885cb1","macos":"1:152359980068:ios:875e07863de24054885cb1","windows":"1:152359980068:web:938e4ffad12233e3885cb1"}}}}}}
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "vampir-koylu-online",
+          "appId": "1:152359980068:android:fdad94839475f6c9885cb1",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "vampir-koylu-online",
+          "configurations": {
+            "android": "1:152359980068:android:fdad94839475f6c9885cb1",
+            "ios": "1:152359980068:ios:875e07863de24054885cb1",
+            "macos": "1:152359980068:ios:875e07863de24054885cb1",
+            "web": "1:152359980068:web:938e4ffad12233e3885cb1",
+            "windows": "1:152359980068:web:938e4ffad12233e3885cb1"
+          }
+        }
+      }
+    }
+  },
+  "hosting": {
+    "public": "build/web",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
+}

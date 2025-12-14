@@ -17,10 +17,7 @@ import 'package:flutter/foundation.dart'
 class DefaultFirebaseOptions {
   static FirebaseOptions get currentPlatform {
     if (kIsWeb) {
-      throw UnsupportedError(
-        'DefaultFirebaseOptions have not been configured for web - '
-        'you can reconfigure this by running the FlutterFire CLI again.',
-      );
+      return web;
     }
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
@@ -77,4 +74,14 @@ class DefaultFirebaseOptions {
     authDomain: 'vampir-koylu-online.firebaseapp.com',
     storageBucket: 'vampir-koylu-online.firebasestorage.app',
   );
+
+  static const FirebaseOptions web = FirebaseOptions(
+    apiKey: 'AIzaSyBkZidyWFMbSmUz3JUx_gakXGCS2IbK6xs',
+    appId: '1:152359980068:web:938e4ffad12233e3885cb1',
+    messagingSenderId: '152359980068',
+    projectId: 'vampir-koylu-online',
+    authDomain: 'vampir-koylu-online.firebaseapp.com',
+    storageBucket: 'vampir-koylu-online.firebasestorage.app',
+  );
+
 }
