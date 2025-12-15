@@ -8,7 +8,6 @@ class FirestoreService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
-  // 1. ODA KURMA
   Future<String?> createRoom(String hostName) async {
     try {
       UserCredential userCredential = await _auth.signInAnonymously();
@@ -20,7 +19,7 @@ class FirestoreService {
         'doctors': 1,
         'watchers': 1,
         'dayDuration': 60,
-        'nightDuration': 10, // Gece aksiyon süresi
+        'nightDuration': 10,
       };
 
       await _firestore.collection('games').doc(roomId).set({
@@ -30,8 +29,8 @@ class FirestoreService {
         'status': 'waiting',
         'phase': 'role_reveal',
         'lastExecution': '',
-        'winner': '', // 'vampires' veya 'villagers'
-        'lastProtectedId': '', // Doktorun son koruduğu kişi (Ard arda koruyamasın diye)
+        'winner': '', 
+        'lastProtectedId': '',
         'settings': defaultSettings,
         'createdAt': FieldValue.serverTimestamp(),
       });
@@ -52,8 +51,6 @@ class FirestoreService {
     }
   }
 
-  // ... (joinRoom, updateLobbyName, removePlayer, deleteRoom, updateGameSettings BURADA KALSIN)
-  // 2. ODAYA KATILMA
   Future<bool> joinRoom(String roomId, String playerName) async {
     try {
       DocumentSnapshot roomDoc = await _firestore.collection('games').doc(roomId).get();
@@ -98,7 +95,6 @@ class FirestoreService {
     });
   }
 
-  // 7. FAZ DEĞİŞTİR
   Future<void> updatePhase(String roomId, String newPhase) async {
     await _firestore.collection('games').doc(roomId).update({
       'phase': newPhase,
@@ -115,9 +111,6 @@ class FirestoreService {
     });
   }
 
-  // --- YENİ: GECE AKSİYONLARI ---
-  
-  // Rolünü kullanan oyuncu buraya istek atar
   Future<void> submitNightAction(String roomId, String role, String targetId) async {
     String myId = _auth.currentUser!.uid;
     await _firestore.collection('games').doc(roomId).collection('night_actions').doc(myId).set({
@@ -127,9 +120,6 @@ class FirestoreService {
     });
   }
 
-  // --- OYUN MANTIĞI VE SONUÇ HESAPLAMA (HOST) ---
-
-  // 1. Gündüz Oylama Sonucu (İnfaz)
   Future<void> processDayResults(String roomId) async {
     var votesSnapshot = await _firestore.collection('games').doc(roomId).collection('votes').get();
     var votes = votesSnapshot.docs;
@@ -162,24 +152,18 @@ class FirestoreService {
     }
 
     await _firestore.collection('games').doc(roomId).update({'lastExecution': resultMessage});
-    
-    // Oyları Temizle
     for (var doc in votes) { await doc.reference.delete(); }
-
-    // Oyun Bitti mi Kontrol Et
     await _checkWinCondition(roomId);
   }
 
-  // 2. Gece Aksiyon Sonuçları (Öldürme/Kurtarma)
   Future<Map<String, dynamic>> resolveNightResults(String roomId) async {
     var actionsSnapshot = await _firestore.collection('games').doc(roomId).collection('night_actions').get();
     var actions = actionsSnapshot.docs;
 
     List<String> vampireTargets = [];
     String? doctorTarget;
-    String lastProtectedId = ""; // Bunu güncellemek için tutuyoruz
+    String lastProtectedId = "";
 
-    // Aksiyonları topla
     for (var doc in actions) {
       var data = doc.data();
       if (data['role'] == 'Vampir') {
@@ -189,10 +173,8 @@ class FirestoreService {
       }
     }
 
-    // Vampirlerin hedefi (Çoğunluk veya ilk oy) - Basitlik için ilk oy
     String? killTarget;
     if (vampireTargets.isNotEmpty) {
-      // En çok seçilen kişiyi bulabiliriz ama şimdilik ilk vampirin dediği olsun
       killTarget = vampireTargets[0];
     }
 
@@ -200,12 +182,10 @@ class FirestoreService {
     bool doctorSuccess = false;
 
     if (killTarget != null) {
-      // Doktor kurtardı mı?
       if (doctorTarget == killTarget) {
         executionMessage = "Gece biri saldırıya uğradı ama DOKTOR onu kurtardı! 🛡️";
         doctorSuccess = true;
       } else {
-        // Öldür
         var playerDoc = await _firestore.collection('games').doc(roomId).collection('players').doc(killTarget).get();
         String playerName = playerDoc.data()?['name'] ?? 'Birisi';
         executionMessage = "$playerName gece vampirler tarafından öldürüldü! 🩸";
@@ -214,18 +194,12 @@ class FirestoreService {
       }
     }
 
-    // Doktorun son koruduğu kişiyi güncelle
     if (doctorTarget != null) {
       await _firestore.collection('games').doc(roomId).update({'lastProtectedId': doctorTarget});
     }
 
-    // Sonucu yaz
     await _firestore.collection('games').doc(roomId).update({'lastExecution': executionMessage});
-
-    // Aksiyonları temizle
     for (var doc in actions) { await doc.reference.delete(); }
-
-    // Kazanma kontrolü
     await _checkWinCondition(roomId);
 
     return {
@@ -234,7 +208,6 @@ class FirestoreService {
     };
   }
 
-  // 3. KAZANMA KOŞULLARI (MANTIKSAL KALP ❤️)
   Future<void> _checkWinCondition(String roomId) async {
     var playersSnapshot = await _firestore.collection('games').doc(roomId).collection('players').get();
     var players = playersSnapshot.docs;
@@ -252,17 +225,14 @@ class FirestoreService {
       }
     }
 
-    // 1. Masumlar Kazanır (Vampir kalmadıysa)
     if (vampires == 0) {
       await _firestore.collection('games').doc(roomId).update({'winner': 'villagers'});
     }
-    // 2. Vampirler Kazanır (Vampir sayısı diğerlerine eşit veya fazlaysa)
     else if (vampires >= others) {
       await _firestore.collection('games').doc(roomId).update({'winner': 'vampires'});
     }
   }
 
-  // STREAMLER VE DİĞERLERİ
   Stream<DocumentSnapshot> getGameStream(String roomId) {
     return _firestore.collection('games').doc(roomId).snapshots();
   }
@@ -276,16 +246,13 @@ class FirestoreService {
     return _firestore.collection('games').doc(roomId).collection('votes').doc(myId).snapshots();
   }
 
-  // Kendi gece aksiyonumu dinle (Seçtiğim kişiyi yeşil görmek için)
   Stream<DocumentSnapshot> getMyNightActionStream(String roomId) {
     String myId = _auth.currentUser!.uid;
     return _firestore.collection('games').doc(roomId).collection('night_actions').doc(myId).snapshots();
   }
 
-  // OYUNU BAŞLAT
   Future<void> assignRolesAndStart(String roomId) async {
-    // ... (Aynen kalıyor, kod tekrarı olmasın diye burayı kısa tutuyorum ama sen silme!)
-     try {
+    try {
       var roomRef = _firestore.collection('games').doc(roomId);
       var roomSnapshot = await roomRef.get();
       var playersSnapshot = await roomRef.collection('players').get();
@@ -319,7 +286,9 @@ class FirestoreService {
         'status': 'playing',
         'phase': 'role_reveal', 
         'startedAt': FieldValue.serverTimestamp(),
-        'winner': '', // Reset winner
+        // !!! İŞTE BU SATIR EKSİKTİ, BUNU EKLEDİK !!!
+        'lastPhaseChange': FieldValue.serverTimestamp(), 
+        'winner': '', 
       });
 
       await batch.commit();

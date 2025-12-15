@@ -27,7 +27,7 @@ class _GameScreenState extends State<GameScreen> {
   Map<String, dynamic> _settings = {};
   bool _isHost = false;
   String? _myRole;
-  bool _isAlive = true; // Varsayılan canlı
+  bool _isAlive = true;
   String? _lastExecutionMessage;
   String? _winner;
   String? _lastProtectedId;
@@ -36,12 +36,18 @@ class _GameScreenState extends State<GameScreen> {
   bool _doctorSuccess = false;
 
   Timer? _timer;
-  int _remainingTime = 0;
+  
+  // Geçişin üst üste tetiklenmesini engellemek için kilit
+  bool _isTransitioning = false; 
 
+  // Firestore verilerini burada tutalım ki Timer içinde erişebilelim
+  Timestamp? _lastPhaseChange;
+  
   @override
   void initState() {
     super.initState();
     _fetchMyDetails();
+    _startSyncTimer(); 
   }
 
   @override
@@ -67,7 +73,6 @@ class _GameScreenState extends State<GameScreen> {
     }
   }
 
-  // --- ROL GÖRSELİ SEÇİCİ ---
   String _getRoleBackgroundImage() {
     switch (_myRole) {
       case 'Vampir': return 'assets/images/vampir_role.jpg';
@@ -78,48 +83,73 @@ class _GameScreenState extends State<GameScreen> {
     }
   }
 
+  // --- ZAMANLAYICI VE OTOMATİK GEÇİŞ ---
+  void _startSyncTimer() {
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) return;
+      
+      setState(() {}); // Ekranı yenile
+
+      // Sadece HOST kontrol eder
+      if (_isHost && !_isTransitioning) {
+        int remaining = _calculateRemainingTime();
+        if (remaining <= 0) {
+          _handleAutoTransition();
+        }
+      }
+    });
+  }
+
+  Future<void> _handleAutoTransition() async {
+    print("Süre bitti, otomatik geçiş yapılıyor...");
+    _isTransitioning = true; // Kilidi kapat
+    await _nextPhase();
+    
+    // İşlem bitince hemen açma, fazın değişmesini bekle
+    // StreamBuilder yeni fazı algılayınca kilit _currentPhase kontrolünde açılabilir
+    // Ama güvenli olsun diye kısa bir gecikme ekleyelim
+    await Future.delayed(const Duration(seconds: 2));
+    if(mounted) _isTransitioning = false; 
+  }
+
+  // Merkezi Süre Hesaplama Fonksiyonu
+  int _calculateRemainingTime() {
+    if (_lastPhaseChange == null) return 0;
+
+    int phaseDuration = 60;
+    if (_currentPhase == 'role_reveal') phaseDuration = 5; // Rol gösterme süresi
+    else if (_currentPhase == 'night_processing') phaseDuration = 5;
+    else phaseDuration = _settings['${_currentPhase}Duration'] ?? 60;
+
+    DateTime startTime = _lastPhaseChange!.toDate();
+    DateTime now = DateTime.now();
+    int secondsPassed = now.difference(startTime).inSeconds;
+    int remaining = phaseDuration - secondsPassed;
+    
+    return remaining > 0 ? remaining : 0;
+  }
+
   // --- FAZ GEÇİŞLERİ ---
   Future<void> _nextPhase() async {
     if (!_isHost) return;
 
     String nextPhase;
-    int nextDuration;
-
+    
     if (_currentPhase == 'role_reveal') {
       nextPhase = 'day';
-      nextDuration = _settings['dayDuration'] ?? 60;
     } else if (_currentPhase == 'day') {
       await _service.processDayResults(widget.roomId);
       nextPhase = 'night';
-      nextDuration = _settings['nightDuration'] ?? 10;
     } else if (_currentPhase == 'night') {
       nextPhase = 'night_processing';
-      nextDuration = 5;
     } else if (_currentPhase == 'night_processing') {
       await _service.resolveNightResults(widget.roomId);
       nextPhase = 'day';
-      nextDuration = _settings['dayDuration'] ?? 60;
     } else {
       nextPhase = 'day';
-      nextDuration = 60;
     }
 
     await _service.updatePhase(widget.roomId, nextPhase);
-    _startTimer(nextDuration);
-  }
-
-  void _startTimer(int duration) {
-    if (!_isHost) return;
-    _timer?.cancel();
-    _remainingTime = duration;
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_remainingTime > 0) {
-        setState(() => _remainingTime--);
-      } else {
-        _timer?.cancel();
-        _nextPhase();
-      }
-    });
   }
 
   void _showGameOverDialog(String winner) {
@@ -164,19 +194,25 @@ class _GameScreenState extends State<GameScreen> {
 
           var gameData = snapshot.data!.data() as Map<String, dynamic>;
           
-          String newPhase = gameData['phase'] ?? 'role_reveal';
-          if (newPhase != _currentPhase) {
-            _currentPhase = newPhase;
-            if (_currentPhase == 'night') {
-              _watcherResult = null;
-              _doctorSuccess = false;
-            }
-            // Faz değişince durumumu güncelle (Öldüm mü kaldım mı?)
-            _fetchMyDetails();
-          }
-
+          String serverPhase = gameData['phase'] ?? 'role_reveal';
+          
+          // Verileri güncelle
+          _lastPhaseChange = gameData['lastPhaseChange'] ?? gameData['startedAt'];
           var settings = gameData['settings'] as Map<String, dynamic>?;
           if (settings != null) _settings = settings;
+
+          // Faz Değişimi Algılama
+          if (serverPhase != _currentPhase) {
+             _currentPhase = serverPhase;
+             _isTransitioning = false; // Faz değişti, kilidi aç
+             if (_currentPhase == 'night') {
+              _watcherResult = null;
+              _doctorSuccess = false;
+             }
+             _fetchMyDetails();
+          }
+
+          int remainingTime = _calculateRemainingTime();
 
           _lastExecutionMessage = gameData['lastExecution'];
           _lastProtectedId = gameData['lastProtectedId'];
@@ -189,43 +225,26 @@ class _GameScreenState extends State<GameScreen> {
             });
           }
 
-          // Durum Kontrolleri
           bool isNight = _currentPhase == 'night';
           bool isProcessing = _currentPhase == 'night_processing';
           bool isRoleReveal = _currentPhase == 'role_reveal';
-          bool amIDead = !_isAlive; // Ölü müyüm?
+          bool amIDead = !_isAlive;
 
-          // --- ARKA PLAN SEÇİMİ ---
           String bgImage;
           if (amIDead) {
-            // 1. Eğer ölüysem MEZARLIK
             bgImage = 'assets/images/mezarlik.jpg';
           } else if (isRoleReveal) {
-            // 2. Rol öğrenirken ROL GÖRSELİ
             bgImage = _getRoleBackgroundImage();
           } else if (isNight && ['Vampir', 'Doktor', 'Gözcü'].contains(_myRole)) {
-            // 3. Gece ve rolüm varsa ROL GÖRSELİ (Köylü hariç)
             bgImage = _getRoleBackgroundImage();
           } else if (isNight || isProcessing) {
-            // 4. Gece ama köylüysem veya işlem yapılıyorsa STANDART GECE
             bgImage = RoleAssets.welcome;
           } else {
-            // 5. Gündüz KÖY MEYDANI
             bgImage = 'assets/images/background.jpg';
-          }
-
-          // Host Timer Başlat
-          if (_isHost && _timer == null) {
-             int duration = 5;
-             if (_currentPhase == 'night') duration = _settings['nightDuration'] ?? 10;
-             else if (_currentPhase == 'day') duration = _settings['dayDuration'] ?? 60;
-             else if (_currentPhase == 'night_processing') duration = 5;
-             _startTimer(duration);
           }
 
           return Stack(
             children: [
-              // 1. DİNAMİK ARKA PLAN
               AnimatedSwitcher(
                 duration: const Duration(milliseconds: 1000),
                 child: Container(
@@ -240,15 +259,14 @@ class _GameScreenState extends State<GameScreen> {
                 ),
               ),
 
-              // 2. ANA İÇERİK
               SafeArea(
                 child: amIDead
-                    ? _buildDeadView() // ÖLÜ EKRANI
+                    ? _buildDeadView()
                     : isRoleReveal
-                        ? _buildRoleRevealView() // ROL ÖĞRENME
+                        ? _buildRoleRevealView(remainingTime)
                         : Column(
                             children: [
-                              _buildHeader(isNight || isProcessing), // Sol üstte rol yazısı KALDIRILDI
+                              _buildHeader(isNight || isProcessing, remainingTime),
                               const SizedBox(height: 10),
                               Expanded(
                                 child: (isNight || isProcessing)
@@ -259,7 +277,6 @@ class _GameScreenState extends State<GameScreen> {
                           ),
               ),
 
-              // 3. HOST BUTONU (Ölü değilse ve rol gösterimi değilse)
               if (_isHost && !isRoleReveal && !amIDead)
                 Positioned(
                   bottom: 20,
@@ -278,7 +295,6 @@ class _GameScreenState extends State<GameScreen> {
     );
   }
 
-  // --- ÖLÜ EKRANI (MEZARLIK) ---
   Widget _buildDeadView() {
     return Center(
       child: Column(
@@ -301,42 +317,38 @@ class _GameScreenState extends State<GameScreen> {
     );
   }
 
-  // --- ÜST BAŞLIK (ROL İSMİ KALDIRILDI) ---
-  Widget _buildHeader(bool isNight) {
+  Widget _buildHeader(bool isNight, int time) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // Sol taraf artık boş veya oyun durumu yazabilir (Rol yazısını kaldırdık)
           Text(
             isNight ? "GECE" : "GÜNDÜZ",
             style: GoogleFonts.medievalSharp(color: Colors.white54, fontSize: 18, fontWeight: FontWeight.bold),
           ),
           
-          if (_isHost)
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(color: AppColors.gold, width: 2),
-                color: Colors.black54
-              ),
-              child: Text("$_remainingTime", style: GoogleFonts.medievalSharp(color: Colors.white, fontSize: 20)),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: AppColors.gold, width: 2),
+              color: Colors.black54
             ),
+            child: Text("$time", style: GoogleFonts.medievalSharp(color: Colors.white, fontSize: 20)),
+          ),
         ],
       ),
     );
   }
 
-  // --- ROL ÖĞRENME (Rol Arkaplanı Üzerine) ---
-  Widget _buildRoleRevealView() {
+  Widget _buildRoleRevealView(int time) {
     return Center(
       child: Container(
         padding: const EdgeInsets.all(20),
         margin: const EdgeInsets.symmetric(horizontal: 20),
         decoration: BoxDecoration(
-          color: Colors.black54, // Yazı okunsun diye hafif siyah zemin
+          color: Colors.black54, 
           borderRadius: BorderRadius.circular(20),
           border: Border.all(color: AppColors.gold, width: 3)
         ),
@@ -350,21 +362,22 @@ class _GameScreenState extends State<GameScreen> {
               style: GoogleFonts.medievalSharp(fontSize: 40, fontWeight: FontWeight.bold, color: AppColors.gold)
             ).animate().scale(duration: 600.ms),
             const SizedBox(height: 10),
-            // Kısa açıklama
              Text(
                _myRole == 'Vampir' ? "Gece avlan, gündüz saklan." :
                _myRole == 'Doktor' ? "Hayat kurtarmak senin elinde." :
                _myRole == 'Gözcü' ? "Gerçekleri açığa çıkar." : "Köyünü savun, haini bul.",
                textAlign: TextAlign.center,
                style: GoogleFonts.medievalSharp(fontSize: 16, color: Colors.white),
-             )
+             ),
+             const SizedBox(height: 20),
+             Text("Başlıyor: $time", style: GoogleFonts.medievalSharp(fontSize: 20, color: Colors.white70))
           ],
         ),
       ),
     );
   }
 
-  // --- DİĞER FONKSİYONLAR (Vampir, Doktor vb. arayüzleri aynı kaldı) ---
+  // --- DİĞER FONKSİYONLAR ---
   Widget _buildNightInterface(bool isProcessing) {
     if (isProcessing) {
       return Center(

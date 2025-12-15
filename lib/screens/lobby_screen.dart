@@ -1,5 +1,6 @@
 // lib/screens/lobby_screen.dart
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // Panoya kopyalamak için
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -25,7 +26,6 @@ class _LobbyScreenState extends State<LobbyScreen> {
   final FirestoreService _service = FirestoreService();
   final String _myUserId = FirebaseAuth.instance.currentUser!.uid;
 
-  // Varsayılan Ayarlar
   Map<String, dynamic> _settings = {
     'vampires': 1,
     'doctors': 1,
@@ -41,7 +41,6 @@ class _LobbyScreenState extends State<LobbyScreen> {
       stream: _service.getGameStream(widget.roomId),
       builder: (context, gameSnapshot) {
         
-        // 1. YÜKLENİYORSA BEKLE (HATA BURADAYDI, DÜZELTİLDİ)
         if (gameSnapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(
             backgroundColor: AppColors.parchment,
@@ -49,7 +48,6 @@ class _LobbyScreenState extends State<LobbyScreen> {
           );
         }
 
-        // 2. ODA YOKSA VEYA HATA VARSA ÇIK
         if (!gameSnapshot.hasData || !gameSnapshot.data!.exists) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
              if (mounted) Navigator.of(context).popUntil((route) => route.isFirst);
@@ -60,7 +58,6 @@ class _LobbyScreenState extends State<LobbyScreen> {
         var gameData = gameSnapshot.data!.data() as Map<String, dynamic>;
         String lobbyName = gameData['lobbyName'] ?? "Oyun Odası";
 
-        // Oyun başladıysa yönlendir
         if (gameData['status'] == 'playing') {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted) {
@@ -71,15 +68,13 @@ class _LobbyScreenState extends State<LobbyScreen> {
           });
         }
 
-        // Ayarları güncelle
         var incomingSettings = gameData['settings'] as Map<String, dynamic>?;
         if (incomingSettings != null) {
-          _settings = Map.from(incomingSettings); // Kopya oluştur
+          _settings = Map.from(incomingSettings);
         }
 
         return Scaffold(
           appBar: AppBar(
-            // --- ODA İSMİ (Host ise tıklayıp değiştirebilir) ---
             title: GestureDetector(
               onTap: widget.isHost ? () => _editLobbyName(context, lobbyName) : null,
               child: Row(
@@ -109,19 +104,51 @@ class _LobbyScreenState extends State<LobbyScreen> {
           ),
           body: Column(
             children: [
-              // ODA KODU BİLGİSİ
+              // --- YENİLENEN ODA KODU ALANI ---
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 5),
-                color: Colors.black26,
-                child: Text(
-                  "ODA KODU: ${widget.roomId}", 
-                  textAlign: TextAlign.center,
-                  style: GoogleFonts.medievalSharp(color: Colors.white70, fontSize: 14, letterSpacing: 2),
+                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 15),
+                color: Colors.black38,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      "ODA KODU: ", 
+                      style: GoogleFonts.medievalSharp(color: Colors.white70, fontSize: 14, letterSpacing: 1),
+                    ),
+                    Text(
+                      widget.roomId,
+                      style: GoogleFonts.medievalSharp(color: AppColors.gold, fontSize: 18, fontWeight: FontWeight.bold, letterSpacing: 2),
+                    ),
+                    const SizedBox(width: 10),
+                    
+                    // KOPYALAMA BUTONU
+                    InkWell(
+                      onTap: () {
+                        Clipboard.setData(ClipboardData(text: widget.roomId));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text("Oda kodu kopyalandı: ${widget.roomId}", style: GoogleFonts.medievalSharp()),
+                            backgroundColor: AppColors.saddleBrown,
+                            duration: const Duration(milliseconds: 1500),
+                          )
+                        );
+                      },
+                      borderRadius: BorderRadius.circular(50),
+                      child: Container(
+                        padding: const EdgeInsets.all(5),
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(color: AppColors.gold)
+                        ),
+                        child: const Icon(Icons.copy, color: AppColors.gold, size: 16),
+                      ),
+                    ),
+                  ],
                 ),
               ),
+              // ---------------------------------
 
-              // AYAR ÖZETİ (Süreler de görünsün)
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(10),
@@ -153,7 +180,6 @@ class _LobbyScreenState extends State<LobbyScreen> {
               const SizedBox(height: 10),
               Text("Oyuncular", style: GoogleFonts.medievalSharp(fontSize: 24, fontWeight: FontWeight.bold)),
               
-              // OYUNCU LİSTESİ
               Expanded(
                 child: StreamBuilder<QuerySnapshot>(
                   stream: _service.getPlayersStream(widget.roomId),
@@ -161,7 +187,6 @@ class _LobbyScreenState extends State<LobbyScreen> {
                     if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
                     var players = snapshot.data!.docs;
 
-                    // Kendi atılma durumumuzu kontrol et (Listede yoksa atılmışızdır)
                     bool amIInList = players.any((doc) => doc.id == _myUserId);
                     if (!amIInList) {
                        WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -204,7 +229,6 @@ class _LobbyScreenState extends State<LobbyScreen> {
                 ),
               ),
 
-              // BAŞLAT BUTONU
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(20),
@@ -307,9 +331,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
     }
   }
 
-  // --- GELİŞMİŞ AYARLAR PENCERESİ ---
   void _showSettingsDialog(BuildContext context) {
-    // Geçici ayarlar (İptal ederse diye)
     Map<String, dynamic> tempSettings = Map.from(_settings);
 
     showDialog(

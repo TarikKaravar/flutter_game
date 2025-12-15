@@ -1,38 +1,88 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <!--
-    If you are serving your web app in a path other than the root, change the
-    href value below to reflect the base path you are serving from.
-
-    The path provided below has to start and end with a slash "/" in order for
-    it to work correctly.
-
-    For more details:
-    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
-
-    This is a placeholder for base href that will be replaced by the value of
-    the `--base-href` argument provided to `flutter build`.
-  -->
   <base href="$FLUTTER_BASE_HREF">
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
   <meta name="description" content="A new Flutter project.">
 
-  <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="apple-mobile-web-app-title" content="flutter_app">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
-  <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>flutter_app</title>
+  <title>Vampir Köylü Online</title>
   <link rel="manifest" href="manifest.json">
+
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #1a1a2e; /* Oyunun arka plan rengiyle uyumlu */
+      overflow: hidden; /* Yüklenirken kaydırma çubuklarını gizle */
+    }
+    .loading-container {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: #1a1a2e;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 9999;
+      transition: opacity 0.5s ease-out;
+    }
+    .spinner {
+      width: 60px;
+      height: 60px;
+      border: 6px solid #d4af37; /* Altın rengi */
+      border-top: 6px solid transparent;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    .loading-text {
+      color: #d4af37;
+      font-family: 'Courier New', Courier, monospace;
+      margin-top: 25px;
+      font-size: 20px;
+      font-weight: bold;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      text-shadow: 0px 0px 10px rgba(0,0,0,0.5);
+    }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+  </style>
+
+  <script>
+    window.flutterWebRenderer = "html";
+  </script>
 </head>
 <body>
+  <div id="loading_indicator" class="loading-container">
+    <div class="spinner"></div>
+    <div class="loading-text">Yükleniyor...</div>
+  </div>
+
   <script src="flutter_bootstrap.js" async></script>
+
+  <script>
+    // Uygulama tamamen yüklendiğinde yükleme ekranını kaldır
+    window.addEventListener('load', function() {
+      // Güvenlik önlemi: 10 saniye sonra her türlü kaldır (Uygulama çok yavaşsa takılı kalmasın)
+      setTimeout(function() {
+        var loading = document.getElementById('loading_indicator');
+        if (loading) {
+          loading.style.opacity = '0';
+          setTimeout(function() { loading.style.display = 'none'; }, 500);
+        }
+      }, 4000); // 4 saniye bekle (Flutter genelde bu sürede açılır)
+    });
+  </script>
 </body>
 </html>
