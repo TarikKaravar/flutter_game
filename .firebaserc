@@ -1,5 +1,7 @@
 {
   "projects": {
     "default": "vampir-koylu-online"
-  }
+  },
+  "targets": {},
+  "etags": {}
 }

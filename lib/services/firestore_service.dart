@@ -19,7 +19,7 @@ class FirestoreService {
         'doctors': 1,
         'watchers': 1,
         'dayDuration': 60,
-        'nightDuration': 10,
+        'nightDuration': 30, // Gece süresi 30 saniye
       };
 
       await _firestore.collection('games').doc(roomId).set({
@@ -92,13 +92,6 @@ class FirestoreService {
   Future<void> updateGameSettings(String roomId, Map<String, dynamic> newSettings) async {
     await _firestore.collection('games').doc(roomId).update({
       'settings': newSettings
-    });
-  }
-
-  Future<void> updatePhase(String roomId, String newPhase) async {
-    await _firestore.collection('games').doc(roomId).update({
-      'phase': newPhase,
-      'lastPhaseChange': FieldValue.serverTimestamp(),
     });
   }
 
@@ -286,9 +279,10 @@ class FirestoreService {
         'status': 'playing',
         'phase': 'role_reveal', 
         'startedAt': FieldValue.serverTimestamp(),
-        // !!! İŞTE BU SATIR EKSİKTİ, BUNU EKLEDİK !!!
-        'lastPhaseChange': FieldValue.serverTimestamp(), 
+        'phaseStartTime': FieldValue.serverTimestamp(), 
+        'phaseDuration': 15, // Rol gösterme süresi
         'winner': '', 
+        'lastExecution': '',
       });
 
       await batch.commit();
@@ -301,5 +295,21 @@ class FirestoreService {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     Random rnd = Random();
     return String.fromCharCodes(Iterable.generate(6, (_) => chars.codeUnitAt(rnd.nextInt(chars.length))));
+  }
+
+  Future<void> startNewPhase({
+    required String roomId,
+    required String newPhase,
+    required int durationInSeconds,
+  }) async {
+    try {
+      await _firestore.collection('games').doc(roomId).update({
+        'phase': newPhase, 
+        'phaseStartTime': FieldValue.serverTimestamp(), 
+        'phaseDuration': durationInSeconds,
+      });
+    } catch (e) {
+      print("Evre başlatılırken hata oluştu: $e");
+    }
   }
 }

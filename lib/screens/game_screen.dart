@@ -8,7 +8,6 @@ import 'package:google_fonts/google_fonts.dart';
 import '../config/app_colors.dart';
 import '../services/firestore_service.dart';
 import '../utils/role_assets.dart';
-import 'home_screen.dart';
 
 class GameScreen extends StatefulWidget {
   final String roomId;
@@ -23,7 +22,7 @@ class _GameScreenState extends State<GameScreen> {
   final FirestoreService _service = FirestoreService();
   final String _myUserId = FirebaseAuth.instance.currentUser!.uid;
   
-  String _currentPhase = 'role_reveal'; 
+  String _currentPhase = ''; 
   Map<String, dynamic> _settings = {};
   bool _isHost = false;
   String? _myRole;
@@ -36,12 +35,9 @@ class _GameScreenState extends State<GameScreen> {
   bool _doctorSuccess = false;
 
   Timer? _timer;
-  
-  // Geçişin üst üste tetiklenmesini engellemek için kilit
   bool _isTransitioning = false; 
 
-  // Firestore verilerini burada tutalım ki Timer içinde erişebilelim
-  Timestamp? _lastPhaseChange;
+  int _remainingTime = 0; 
   
   @override
   void initState() {
@@ -83,50 +79,26 @@ class _GameScreenState extends State<GameScreen> {
     }
   }
 
-  // --- ZAMANLAYICI VE OTOMATİK GEÇİŞ ---
+  // --- ZAMANLAYICI (EKRAN YENİLEME VE OTOMATİK GEÇİŞ) ---
   void _startSyncTimer() {
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) return;
       
-      setState(() {}); // Ekranı yenile
+      setState(() {}); // Ekranı her saniye yenile (build metodunu tetikler)
 
-      // Sadece HOST kontrol eder
-      if (_isHost && !_isTransitioning) {
-        int remaining = _calculateRemainingTime();
-        if (remaining <= 0) {
-          _handleAutoTransition();
-        }
+      // Süre bittiğinde sadece Host tetikler
+      if (_remainingTime <= 0 && _isHost && !_isTransitioning) {
+        _handleAutoTransition();
       }
     });
   }
 
   Future<void> _handleAutoTransition() async {
-    print("Süre bitti, otomatik geçiş yapılıyor...");
-    _isTransitioning = true; // Kilidi kapat
+    _isTransitioning = true; 
     await _nextPhase();
     
-    // İşlem bitince hemen açma, fazın değişmesini bekle
-    // StreamBuilder yeni fazı algılayınca kilit _currentPhase kontrolünde açılabilir
-    // Ama güvenli olsun diye kısa bir gecikme ekleyelim
     await Future.delayed(const Duration(seconds: 2));
     if(mounted) _isTransitioning = false; 
-  }
-
-  // Merkezi Süre Hesaplama Fonksiyonu
-  int _calculateRemainingTime() {
-    if (_lastPhaseChange == null) return 0;
-
-    int phaseDuration = 60;
-    if (_currentPhase == 'role_reveal') phaseDuration = 5; // Rol gösterme süresi
-    else if (_currentPhase == 'night_processing') phaseDuration = 5;
-    else phaseDuration = _settings['${_currentPhase}Duration'] ?? 60;
-
-    DateTime startTime = _lastPhaseChange!.toDate();
-    DateTime now = DateTime.now();
-    int secondsPassed = now.difference(startTime).inSeconds;
-    int remaining = phaseDuration - secondsPassed;
-    
-    return remaining > 0 ? remaining : 0;
   }
 
   // --- FAZ GEÇİŞLERİ ---
@@ -134,24 +106,35 @@ class _GameScreenState extends State<GameScreen> {
     if (!_isHost) return;
 
     String nextPhase;
+    int duration = 60;
     
     if (_currentPhase == 'role_reveal') {
-      nextPhase = 'day';
-    } else if (_currentPhase == 'day') {
-      await _service.processDayResults(widget.roomId);
       nextPhase = 'night';
+      duration = _settings['nightDuration'] ?? 30;
     } else if (_currentPhase == 'night') {
       nextPhase = 'night_processing';
+      duration = 5; 
     } else if (_currentPhase == 'night_processing') {
       await _service.resolveNightResults(widget.roomId);
       nextPhase = 'day';
+      duration = _settings['dayDuration'] ?? 60;
+    } else if (_currentPhase == 'day') {
+      await _service.processDayResults(widget.roomId);
+      nextPhase = 'night';
+      duration = _settings['nightDuration'] ?? 30;
     } else {
-      nextPhase = 'day';
+      nextPhase = 'night';
+      duration = _settings['nightDuration'] ?? 30;
     }
 
-    await _service.updatePhase(widget.roomId, nextPhase);
+    await _service.startNewPhase(
+      roomId: widget.roomId, 
+      newPhase: nextPhase, 
+      durationInSeconds: duration,
+    );
   }
 
+  // --- LOBİYE DÖNÜŞ ---
   void _showGameOverDialog(String winner) {
     bool villagerWin = winner == 'villagers';
     showDialog(
@@ -171,12 +154,19 @@ class _GameScreenState extends State<GameScreen> {
         ),
         actions: [
           TextButton(
-            child: const Text("ANA MENÜYE DÖN"),
-            onPressed: () {
-              Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(builder: (context) => const HomeScreen()), 
-                (route) => false
-              );
+            child: Text("LOBİYE DÖN", style: TextStyle(color: AppColors.darkBrown, fontWeight: FontWeight.bold)),
+            onPressed: () async {
+              if (_isHost) {
+                await FirebaseFirestore.instance.collection('games').doc(widget.roomId).update({
+                  'status': 'waiting',
+                  'phase': 'role_reveal',
+                  'winner': '',
+                  'lastExecution': '',
+                  'lastProtectedId': '',
+                });
+              }
+              Navigator.of(context).pop(); 
+              Navigator.of(context).pop(); 
             },
           )
         ],
@@ -195,16 +185,16 @@ class _GameScreenState extends State<GameScreen> {
           var gameData = snapshot.data!.data() as Map<String, dynamic>;
           
           String serverPhase = gameData['phase'] ?? 'role_reveal';
-          
-          // Verileri güncelle
-          _lastPhaseChange = gameData['lastPhaseChange'] ?? gameData['startedAt'];
           var settings = gameData['settings'] as Map<String, dynamic>?;
           if (settings != null) _settings = settings;
 
-          // Faz Değişimi Algılama
+          Timestamp? startTime = gameData['phaseStartTime'] ?? gameData['startedAt'];
+          int phaseDuration = gameData['phaseDuration'] ?? 60;
+
+          // FAZ DEĞİŞİMİ ALGILAMA
           if (serverPhase != _currentPhase) {
              _currentPhase = serverPhase;
-             _isTransitioning = false; // Faz değişti, kilidi aç
+             _isTransitioning = false; 
              if (_currentPhase == 'night') {
               _watcherResult = null;
               _doctorSuccess = false;
@@ -212,7 +202,19 @@ class _GameScreenState extends State<GameScreen> {
              _fetchMyDetails();
           }
 
-          int remainingTime = _calculateRemainingTime();
+          // KESİN ZAMAN HESAPLAMASI (SUNUCU BAZLI)
+          if (startTime != null) {
+            // Sunucunun başlattığı andan itibaren geçen gerçek süreyi bul
+            int elapsedSeconds = DateTime.now().difference(startTime.toDate()).inSeconds;
+            int calculatedRemaining = phaseDuration - elapsedSeconds;
+            
+            // Eğer cihaz saati çok ileriyse eksiye düşmemesi için 0'a sabitle
+            if (calculatedRemaining < 0) calculatedRemaining = 0;
+            // Eğer cihaz saati çok geriyse maksimum süreye sabitle
+            if (calculatedRemaining > phaseDuration) calculatedRemaining = phaseDuration;
+
+            _remainingTime = calculatedRemaining;
+          }
 
           _lastExecutionMessage = gameData['lastExecution'];
           _lastProtectedId = gameData['lastProtectedId'];
@@ -263,10 +265,10 @@ class _GameScreenState extends State<GameScreen> {
                 child: amIDead
                     ? _buildDeadView()
                     : isRoleReveal
-                        ? _buildRoleRevealView(remainingTime)
+                        ? _buildRoleRevealView()
                         : Column(
                             children: [
-                              _buildHeader(isNight || isProcessing, remainingTime),
+                              _buildHeader(isNight || isProcessing),
                               const SizedBox(height: 10),
                               Expanded(
                                 child: (isNight || isProcessing)
@@ -283,7 +285,9 @@ class _GameScreenState extends State<GameScreen> {
                   right: 20,
                   child: FloatingActionButton.extended(
                     backgroundColor: AppColors.gold,
-                    onPressed: _nextPhase,
+                    onPressed: () {
+                       if(!_isTransitioning) _handleAutoTransition();
+                    },
                     label: Text("GEÇ >>", style: GoogleFonts.medievalSharp(color: AppColors.darkBrown, fontWeight: FontWeight.bold)),
                     icon: const Icon(Icons.fast_forward, color: AppColors.darkBrown),
                   ),
@@ -317,7 +321,9 @@ class _GameScreenState extends State<GameScreen> {
     );
   }
 
-  Widget _buildHeader(bool isNight, int time) {
+  Widget _buildHeader(bool isNight) {
+    Color timerColor = _remainingTime <= 10 ? Colors.redAccent : Colors.white; 
+    
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
       child: Row(
@@ -332,17 +338,19 @@ class _GameScreenState extends State<GameScreen> {
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              border: Border.all(color: AppColors.gold, width: 2),
+              border: Border.all(color: _remainingTime <= 10 ? Colors.redAccent : AppColors.gold, width: 2),
               color: Colors.black54
             ),
-            child: Text("$time", style: GoogleFonts.medievalSharp(color: Colors.white, fontSize: 20)),
+            child: Text("$_remainingTime", style: GoogleFonts.medievalSharp(color: timerColor, fontSize: 20, fontWeight: FontWeight.bold)),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildRoleRevealView(int time) {
+  Widget _buildRoleRevealView() {
+    Color timerColor = _remainingTime <= 5 ? Colors.redAccent : Colors.white70;
+
     return Center(
       child: Container(
         padding: const EdgeInsets.all(20),
@@ -370,14 +378,13 @@ class _GameScreenState extends State<GameScreen> {
                style: GoogleFonts.medievalSharp(fontSize: 16, color: Colors.white),
              ),
              const SizedBox(height: 20),
-             Text("Başlıyor: $time", style: GoogleFonts.medievalSharp(fontSize: 20, color: Colors.white70))
+             Text("Başlıyor: $_remainingTime", style: GoogleFonts.medievalSharp(fontSize: 24, color: timerColor, fontWeight: FontWeight.bold))
           ],
         ),
       ),
     );
   }
 
-  // --- DİĞER FONKSİYONLAR ---
   Widget _buildNightInterface(bool isProcessing) {
     if (isProcessing) {
       return Center(
