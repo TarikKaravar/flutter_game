@@ -8,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../config/app_colors.dart';
 import '../services/firestore_service.dart';
 import '../utils/role_assets.dart';
+import 'lobby_screen.dart'; 
 
 class GameScreen extends StatefulWidget {
   final String roomId;
@@ -37,7 +38,8 @@ class _GameScreenState extends State<GameScreen> {
   Timer? _timer;
   bool _isTransitioning = false; 
 
-  int _remainingTime = 0; 
+  DateTime? _targetEndTime; 
+  int _remainingTime = 0;
   
   @override
   void initState() {
@@ -79,22 +81,29 @@ class _GameScreenState extends State<GameScreen> {
     }
   }
 
-  // --- ZAMANLAYICI (EKRAN YENİLEME VE OTOMATİK GEÇİŞ) ---
+  // --- ZAMANLAYICI (KESİN SUNUCU SENKRONİZASYONU) ---
   void _startSyncTimer() {
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) return;
       
-      setState(() {}); // Ekranı her saniye yenile (build metodunu tetikler)
+      if (_targetEndTime != null) {
+        int remaining = _targetEndTime!.difference(DateTime.now()).inSeconds;
+        
+        if (remaining < 0) remaining = 0;
 
-      // Süre bittiğinde sadece Host tetikler
-      if (_remainingTime <= 0 && _isHost && !_isTransitioning) {
-        _handleAutoTransition();
+        setState(() {
+          _remainingTime = remaining;
+        });
+
+        if (remaining <= 0 && _isHost && !_isTransitioning) {
+          _handleAutoTransition();
+        }
       }
     });
   }
 
   Future<void> _handleAutoTransition() async {
-    _isTransitioning = true; 
+    _isTransitioning = true;
     await _nextPhase();
     
     await Future.delayed(const Duration(seconds: 2));
@@ -134,7 +143,7 @@ class _GameScreenState extends State<GameScreen> {
     );
   }
 
-  // --- LOBİYE DÖNÜŞ ---
+  // --- LOBİYE DÖNÜŞ (Eksik parametre giderildi) ---
   void _showGameOverDialog(String winner) {
     bool villagerWin = winner == 'villagers';
     showDialog(
@@ -165,8 +174,15 @@ class _GameScreenState extends State<GameScreen> {
                   'lastProtectedId': '',
                 });
               }
-              Navigator.of(context).pop(); 
-              Navigator.of(context).pop(); 
+              Navigator.of(context).pushAndRemoveUntil(
+                MaterialPageRoute(
+                  builder: (context) => LobbyScreen(
+                    roomId: widget.roomId,
+                    isHost: _isHost, // EKSİK OLAN PARAMETRE EKLENDİ
+                  ),
+                ),
+                (route) => route.isFirst, 
+              );
             },
           )
         ],
@@ -195,6 +211,7 @@ class _GameScreenState extends State<GameScreen> {
           if (serverPhase != _currentPhase) {
              _currentPhase = serverPhase;
              _isTransitioning = false; 
+             
              if (_currentPhase == 'night') {
               _watcherResult = null;
               _doctorSuccess = false;
@@ -202,18 +219,9 @@ class _GameScreenState extends State<GameScreen> {
              _fetchMyDetails();
           }
 
-          // KESİN ZAMAN HESAPLAMASI (SUNUCU BAZLI)
+          // HEDEF ZAMANI OLUŞTURMA
           if (startTime != null) {
-            // Sunucunun başlattığı andan itibaren geçen gerçek süreyi bul
-            int elapsedSeconds = DateTime.now().difference(startTime.toDate()).inSeconds;
-            int calculatedRemaining = phaseDuration - elapsedSeconds;
-            
-            // Eğer cihaz saati çok ileriyse eksiye düşmemesi için 0'a sabitle
-            if (calculatedRemaining < 0) calculatedRemaining = 0;
-            // Eğer cihaz saati çok geriyse maksimum süreye sabitle
-            if (calculatedRemaining > phaseDuration) calculatedRemaining = phaseDuration;
-
-            _remainingTime = calculatedRemaining;
+             _targetEndTime = startTime.toDate().add(Duration(seconds: phaseDuration));
           }
 
           _lastExecutionMessage = gameData['lastExecution'];
@@ -341,7 +349,9 @@ class _GameScreenState extends State<GameScreen> {
               border: Border.all(color: _remainingTime <= 10 ? Colors.redAccent : AppColors.gold, width: 2),
               color: Colors.black54
             ),
-            child: Text("$_remainingTime", style: GoogleFonts.medievalSharp(color: timerColor, fontSize: 20, fontWeight: FontWeight.bold)),
+            child: _targetEndTime == null 
+              ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.gold))
+              : Text("$_remainingTime", style: GoogleFonts.medievalSharp(color: timerColor, fontSize: 20, fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -378,7 +388,9 @@ class _GameScreenState extends State<GameScreen> {
                style: GoogleFonts.medievalSharp(fontSize: 16, color: Colors.white),
              ),
              const SizedBox(height: 20),
-             Text("Başlıyor: $_remainingTime", style: GoogleFonts.medievalSharp(fontSize: 24, color: timerColor, fontWeight: FontWeight.bold))
+             _targetEndTime == null 
+              ? const CircularProgressIndicator(color: AppColors.gold)
+              : Text("Başlıyor: $_remainingTime", style: GoogleFonts.medievalSharp(fontSize: 24, color: timerColor, fontWeight: FontWeight.bold))
           ],
         ),
       ),
